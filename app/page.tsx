@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from "react"
 import dynamic from "next/dynamic"
-import { FileText, IndianRupee, AlertCircle, TrendingUp, Download, RotateCcw, Loader2 } from "lucide-react"
+import { FileText, IndianRupee, AlertCircle, TrendingUp, Download, RotateCcw, Loader2, Briefcase, Undo2 } from "lucide-react"
 import { DashboardShell } from "@/components/dashboard-shell"
 import { ProcessStepper } from "@/components/process-stepper"
 import { FileDropzone } from "@/components/file-dropzone"
@@ -181,26 +181,28 @@ export default function GSTDashboard() {
                   Upload New File
                 </Button>
 
-                {/* Mode Toggle */}
-                <div className="flex items-center gap-2 border rounded-lg p-1">
-                  <Button
-                    variant={returnType === 'B2B' ? 'default' : 'ghost'}
-                    size="sm"
+                {/* Mode Toggle (Segmented Control) */}
+                <div className="bg-muted/50 p-1 rounded-xl inline-flex items-center">
+                  <button
                     onClick={() => setReturnType('B2B')}
-                    className="gap-1"
+                    className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 ${returnType === 'B2B'
+                      ? "bg-background shadow-sm text-foreground ring-1 ring-black/5 dark:ring-white/10"
+                      : "text-muted-foreground hover:text-foreground hover:bg-background/50"
+                      }`}
                   >
-                    <FileText className="w-3 h-3" />
+                    <Briefcase className="w-4 h-4" />
                     B2B Sales
-                  </Button>
-                  <Button
-                    variant={returnType === 'CDNR' ? 'default' : 'ghost'}
-                    size="sm"
+                  </button>
+                  <button
                     onClick={() => setReturnType('CDNR')}
-                    className="gap-1"
+                    className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 ${returnType === 'CDNR'
+                      ? "bg-background shadow-sm text-foreground ring-1 ring-black/5 dark:ring-white/10"
+                      : "text-muted-foreground hover:text-foreground hover:bg-background/50"
+                      }`}
                   >
-                    <RotateCcw className="w-3 h-3" />
+                    <Undo2 className="w-4 h-4" />
                     CDNR
-                  </Button>
+                  </button>
                 </div>
               </div>
 

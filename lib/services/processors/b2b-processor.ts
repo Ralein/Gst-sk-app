@@ -241,6 +241,7 @@ export function cleanB2BRow(row: Record<string, unknown>): Record<string, unknow
 export function validateB2BRows(rows: Record<string, unknown>[]): ValidationResult {
     const validRows: B2BInvoiceRow[] = [];
     const errorRows: ErrorRow[] = [];
+    const seenInvoices = new Set<string>();
 
     rows.forEach((row, index) => {
         // Since we filtered junk rows, 'index' in this array corresponds to valid invoice seq number
@@ -255,7 +256,21 @@ export function validateB2BRows(rows: Record<string, unknown>[]): ValidationResu
         const result = B2BInvoiceRowSchema.safeParse(cleanedRow);
 
         if (result.success) {
-            validRows.push(result.data);
+            const data = result.data;
+            // Duplicate Check: GSTIN + Invoice Number
+            // Only check if both exist (schema guarantees they do if success)
+            const uniqueKey = `${data.gstin}-${data.invoiceNumber}`.toUpperCase();
+
+            if (seenInvoices.has(uniqueKey)) {
+                errorRows.push({
+                    rowNumber,
+                    data: row,
+                    errors: [`Duplicate Invoice: ${data.invoiceNumber} for GSTIN ${data.gstin} already exists in this file.`]
+                });
+            } else {
+                seenInvoices.add(uniqueKey);
+                validRows.push(data);
+            }
         } else {
             const errors = result.error.errors.map((err) => {
                 const field = err.path.join(".");

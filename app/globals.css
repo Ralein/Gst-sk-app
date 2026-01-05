@@ -133,7 +133,33 @@
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground transition-colors duration-300;
+  }
+
+  /* Gradient Backgrounds */
+  .dark body {
+    background-image:
+      radial-gradient(circle at 15% 50%, rgba(76, 29, 149, 0.15), transparent 25%),
+      radial-gradient(circle at 85% 30%, rgba(56, 189, 248, 0.1), transparent 25%);
+    background-attachment: fixed;
+  }
+
+  body:not(.dark) {
+    background-image:
+      radial-gradient(circle at 15% 50%, rgba(224, 231, 255, 0.8), transparent 25%),
+      radial-gradient(circle at 85% 30%, rgba(204, 251, 241, 0.6), transparent 25%);
+    background-attachment: fixed;
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-background/80 backdrop-blur-md border border-border/50 shadow-sm supports-[backdrop-filter]:bg-background/80;
+  }
+
+  .glass-card {
+    @apply bg-card/60 backdrop-blur-md border-white/20 dark:border-white/10 shadow-lg;
   }
 }
