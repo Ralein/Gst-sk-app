@@ -41,12 +41,14 @@ export function FileDropzone({ onFileSelect }: FileDropzoneProps) {
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0]
-      // Basic extension check
-      const validExtensions = ['.xlsx', '.xls', '.csv', '.json']
+      // Strict check: .xlsx, .csv, .json
+      const validExtensions = ['.xlsx', '.csv', '.json']
       const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase()
 
       if (validExtensions.includes(fileExtension)) {
         onFileSelect?.(file)
+      } else {
+        alert("Only .xlsx and .csv files are supported.")
       }
     }
   }
@@ -69,7 +71,7 @@ export function FileDropzone({ onFileSelect }: FileDropzoneProps) {
         type="file"
         className="hidden"
         onChange={handleChange}
-        accept=".xlsx,.xls,.csv,.json"
+        accept=".xlsx,.csv,.json"
       />
 
       <div className="flex flex-col items-center gap-3 text-center p-6 relative z-10">
@@ -87,7 +89,7 @@ export function FileDropzone({ onFileSelect }: FileDropzoneProps) {
             {isDragging ? "Drop file here" : "Upload GST File"}
           </p>
           <p className="text-sm text-muted-foreground mt-1">
-            Excel (.xlsx, .xls) or JSON (GSTR-1 export)
+            Excel (.xlsx), CSV or JSON
           </p>
         </div>
         {!isDragging && (
@@ -96,7 +98,7 @@ export function FileDropzone({ onFileSelect }: FileDropzoneProps) {
           </Button>
         )}
         <p className="text-xs text-muted-foreground mt-2">
-          Supports: .xlsx, .xls, .csv
+          Supports: .xlsx, .csv, .json
         </p>
       </div>
     </div>

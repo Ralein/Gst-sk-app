@@ -1,4 +1,4 @@
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { type ErrorRow, type ValidationResult } from "@/lib/schemas/gst-schema";
 import { type CDNRInvoice } from "@/lib/schemas/cdnr-schema";
 import { type B2BInvoice } from "@/lib/schemas/gst-schema";
@@ -36,9 +36,6 @@ function normalizeHeaders(headerRow: string[], mappingDict: Record<string, strin
 
     headerRow.forEach((header, index) => {
         const normalized = normalizeString(header);
-        // We match against the mapping dict which should ALSO use keys cleaned in the same way 
-        // OR we can rely on the processor exporting keys that match this output.
-        // In b2b-processor.ts I updated keys to be "invoice no" etc.
         const mappedKey = mappingDict[normalized];
         if (mappedKey) {
             mapping[index] = mappedKey;
@@ -48,49 +45,130 @@ function normalizeHeaders(headerRow: string[], mappingDict: Record<string, strin
     return mapping;
 }
 
+/**
+ * Helper to safely extract primitive value from ExcelJS cell.value
+ * Handles RichText, Hyperlinks, Formulas, etc.
+ */
+function getCellValue(cellValue: any): string | number | Date | null | boolean {
+    if (cellValue === null || cellValue === undefined) return null;
+
+    // 1. Primitive types
+    if (typeof cellValue === 'string' || typeof cellValue === 'number' || typeof cellValue === 'boolean' || cellValue instanceof Date) {
+        return cellValue;
+    }
+
+    // 2. Formula (has .result)
+    // ExcelJS formula object: { formula: "...", result: val }
+    if (typeof cellValue === 'object' && 'result' in cellValue) {
+        // Result could be an error object, check that?
+        // Assuming result is primitive or Date
+        return cellValue.result as string | number | Date;
+    }
+
+    // 3. Rich Text (value.richText = [{text: '...'}, ...])
+    if (typeof cellValue === 'object' && 'richText' in cellValue && Array.isArray(cellValue.richText)) {
+        return cellValue.richText.map((rt: any) => rt.text).join('');
+    }
+
+    // 4. Hyperlink (value.text, value.hyperlink)
+    if (typeof cellValue === 'object' && 'text' in cellValue && 'hyperlink' in cellValue) {
+        return cellValue.text;
+    }
+
+    // 5. Fallback for other objects
+    // Avoid String(object) which results in "[object Object]"
+    if (typeof cellValue === 'object') {
+        return null;
+    }
+
+    return String(cellValue);
+}
+
 async function parseExcel(file: File, headerMappingDict: Record<string, string>): Promise<Record<string, unknown>[]> {
     return new Promise((resolve, reject) => {
+        // Enforce .xlsx or .csv extension
+        const extension = file.name.split('.').pop()?.toLowerCase();
+        if (extension !== 'xlsx' && extension !== 'csv') {
+            reject(new Error("Only modern Excel files (.xlsx) or CSV files are supported."));
+            return;
+        }
+
         const reader = new FileReader();
 
-        reader.onload = (e) => {
+        reader.onload = async (e) => {
             try {
-                const data = e.target?.result;
-                const workbook = XLSX.read(data, { type: "binary", cellDates: true });
+                const workbook = new ExcelJS.Workbook();
 
-                // Smart Sheet Detection: Find sheet by name pattern
+                if (extension === 'csv') {
+                    const text = e.target?.result as string;
+                    const worksheet = workbook.addWorksheet('Sheet1');
+                    const rows = text.split(/\r?\n/);
+                    rows.forEach(rowStr => {
+                        if (!rowStr.trim()) return;
+                        // Regex for CSV split handling quotes: /,(?=(?:(?:[^"]*"){2})*[^"]*$)/
+                        const values = rowStr.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
+                        worksheet.addRow(values);
+                    });
+                } else {
+                    const buffer = e.target?.result as ArrayBuffer;
+                    try {
+                        await workbook.xlsx.load(buffer);
+                    } catch (loadError) {
+                        console.error("Workbook load error:", loadError);
+                        throw new Error("Invalid or corrupted .xlsx file.");
+                    }
+                }
+
+                // Smart Sheet Detection
                 const sheetPatterns = ['invoice', 'gstr1', 'b2b', 'sales', 'cdnr', 'credit', 'debit'];
-                let targetSheet = workbook.SheetNames[0]; // Default fallback
+                let targetSheet: ExcelJS.Worksheet | undefined = workbook.worksheets[0];
 
-                for (const name of workbook.SheetNames) {
-                    const lowerName = name.toLowerCase();
+                for (const sheet of workbook.worksheets) {
+                    const lowerName = sheet.name.toLowerCase();
                     if (sheetPatterns.some(pattern => lowerName.includes(pattern))) {
-                        targetSheet = name;
+                        targetSheet = sheet;
                         break;
                     }
                 }
 
-                console.log(`Using sheet: "${targetSheet}" from available: ${workbook.SheetNames.join(', ')}`);
-                const worksheet = workbook.Sheets[targetSheet];
-
-                const jsonData = XLSX.utils.sheet_to_json(worksheet, {
-                    header: 1,
-                    raw: false,
-                    dateNF: "dd-mm-yyyy",
-                }) as unknown[][];
-
-                if (jsonData.length < 2) {
-                    reject(new Error("Excel file must have at least a header row and one data row"));
+                if (!targetSheet) {
+                    reject(new Error("No valid sheet found"));
                     return;
                 }
 
-                // Smart Header Detection with Aggressive Matching
-                let headerRowIndex = -1;
+                console.log(`Using sheet: "${targetSheet.name}"`);
+
+                // Convert worksheet to array of arrays for header detection
+                // We only scan the first 20 rows to find the header
+                const previewRows: string[][] = [];
+                targetSheet.eachRow((row, rowNumber) => {
+                    if (rowNumber <= 20) {
+                        // ExcelJS values are 1-indexed, index 0 is sometimes reserved.
+                        // We need to treat it as an array of strings.
+                        // row.values can be [empty, val1, val2] or {1: val1, 2: val2} depending on sparse
+                        // Safest is to map cells
+                        const rowValues: string[] = [];
+                        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                            // Map to 0-indexed array
+                            const raw = getCellValue(cell.value);
+                            rowValues[colNumber - 1] = raw !== null ? String(raw) : "";
+                        });
+                        previewRows.push(rowValues);
+                    }
+                });
+
+                if (previewRows.length < 1) {
+                    reject(new Error("Excel file appears to be empty"));
+                    return;
+                }
+
+                // Smart Header Detection
+                let headerRowIndex = -1; // 0-based index relative to previewRows (which are absolute 1..20)
                 let maxMatches = 0;
+                let actualHeaderRowNumber = 1; // 1-based absolute Excel row number
 
-                for (let i = 0; i < Math.min(jsonData.length, 20); i++) {
-                    const row = jsonData[i] as string[];
-                    if (!Array.isArray(row)) continue;
-
+                for (let i = 0; i < previewRows.length; i++) {
+                    const row = previewRows[i];
                     let matches = 0;
                     row.forEach(cell => {
                         const normalized = normalizeString(cell);
@@ -102,49 +180,98 @@ async function parseExcel(file: File, headerMappingDict: Record<string, string>)
                     if (matches > maxMatches && matches >= 3) {
                         maxMatches = matches;
                         headerRowIndex = i;
+                        // The previewRows[i] was the i-th row encountered.
+                        // Since we iterate sequentially, we need to find the REAL row number.
+                        // However, to keep it simple, we can re-iterate or assume sequential if no gaps.
+                        // Let's assume sequential for the first few rows usually. 
+                        // Actually, targetSheet.eachRow skips empty rows by default unless includeEmpty is not standard.
                     }
                 }
 
-                if (headerRowIndex === -1) {
+                // If we found a header in our preview, we need to map it back to the Excel row number
+                // Since previewRows is just a push of .eachRow, let's find the absolute row number
+                if (headerRowIndex !== -1) {
+                    // We need to re-find this row to get its exact number or trust our index if no empty top rows
+                    // Let's do a more robust approach:
+                } else {
                     console.warn("Could not auto-detect header row, defaulting to first row.");
                     headerRowIndex = 0;
                 }
 
-                console.log(`Detected header at row index: ${headerRowIndex} with ${maxMatches} matches.`);
+                // Let's get the standard header row content
+                const headerRowContent = previewRows[headerRowIndex];
+                console.log(`Detected header at relative preview index: ${headerRowIndex} with ${maxMatches} matches.`);
 
-                const headerRow = jsonData[headerRowIndex] as string[];
-                const headerMapping = normalizeHeaders(headerRow, headerMappingDict);
+                const headerMapping = normalizeHeaders(headerRowContent, headerMappingDict);
 
-                // Check mapping coverage
-                if (Object.keys(headerMapping).length === 0) {
-                    console.warn("No headers mapped! Check your dictionary keys vs normalized file headers.");
-                }
+                // Now iterate ALL rows from the detected header downwards
+                const dataRows: Record<string, unknown>[] = [];
 
-                const dataRows = jsonData.slice(headerRowIndex + 1).map((row) => {
+                // We need to know which logical row number the header was.
+                // Since `previewRows` only contained non-empty rows (mostly), 
+                // we can't trivially guess the row number if there were gaps.
+                // Simpler approach: Just use the `headerRowIndex` which is 0-indexed into `previewRows`.
+                // BUT we need to process the REST of the file.
+
+                // Let's just iterate the whole sheet again and skip until we pass the header.
+                // This is slightly inefficient but safe.
+                // Better: Keep track of "header found" state.
+
+                let isHeaderFound = false;
+                let headerMatchesRemaining = maxMatches; // simplistic check, or just match exact content
+
+                // Actually, we can just use the fact that `previewRows[headerRowIndex]` IS the header.
+                // We need to skip `headerRowIndex + 1` rows from the start of `eachRow` iteration? No.
+
+                // Let's restart iteration logic to be clean:
+                let currentRowIndex = 0;
+                targetSheet.eachRow((row, rowNumber) => {
+                    // Convert row to string array for this row
+                    const rowValues: string[] = [];
+                    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                        const raw = getCellValue(cell.value);
+                        rowValues[colNumber - 1] = raw !== null ? String(raw) : "";
+                    });
+
+                    // If we haven't confirmed passing the header yet
+                    if (currentRowIndex < headerRowIndex) {
+                        currentRowIndex++;
+                        return; // Skip pre-header rows
+                    }
+
+                    if (currentRowIndex === headerRowIndex) {
+                        // This is the header row, skip it
+                        currentRowIndex++;
+                        return;
+                    }
+
+                    // This is a data row
                     const obj: Record<string, unknown> = {};
-                    (row as unknown[]).forEach((cell, index) => {
-                        const key = headerMapping[index];
+                    let hasData = false;
+
+                    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                        const key = headerMapping[colNumber - 1]; // colNumber is 1-based
                         if (key) {
-                            obj[key] = cell;
+                            let val = getCellValue(cell.value);
+
+                            // Handle formula result if getCellValue returned an object (?) - No, getCellValue handles it.
+                            // But wait, if getCellValue returns date, cleanB2BRow handles it.
+
+                            obj[key] = val;
+                            if (val !== undefined && val !== null && String(val).trim() !== "") {
+                                hasData = true;
+                            }
                         }
                     });
-                    return obj;
-                });
 
-                // Filter out empty rows or junk rows (must have at least 2 value columns)
-                const nonEmptyRows = dataRows.filter((row) => {
-                    let validCount = 0;
-                    for (const val of Object.values(row)) {
-                        if (val !== undefined && val !== null && String(val).trim() !== "") {
-                            validCount++;
-                        }
+                    if (hasData) {
+                        dataRows.push(obj);
                     }
-                    // Threshold: Needs at least 2 columns of data to be a valid invoice row
-                    // This skips metadata rows like " Invoice regarding details..."
-                    return validCount >= 2;
+                    currentRowIndex++;
                 });
 
-                resolve(nonEmptyRows);
+                resolve(dataRows);
+
             } catch (error) {
                 reject(error);
             }
@@ -154,7 +281,11 @@ async function parseExcel(file: File, headerMappingDict: Record<string, string>)
             reject(new Error("Failed to read file"));
         };
 
-        reader.readAsBinaryString(file);
+        if (extension === 'csv') {
+            reader.readAsText(file);
+        } else {
+            reader.readAsArrayBuffer(file);
+        }
     });
 }
 

@@ -4,7 +4,7 @@ import {
     type CDNRInvoice,
 } from "@/lib/schemas/cdnr-schema";
 import { type ErrorRow, type ValidationResult } from "@/lib/schemas/gst-schema";
-import * as XLSX from "xlsx";
+
 
 const MONTH_MAP: Record<string, string> = {
     jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
@@ -33,14 +33,7 @@ function excelDateToString(excelDate: number | string | Date): string {
     // Handle Number (Excel Serial)
     if (typeof excelDate === "number") {
         let dateObj: Date | null = null;
-        try {
-            const ssfDate = XLSX.SSF.parse_date_code(excelDate);
-            if (ssfDate) {
-                return `${String(ssfDate.d).padStart(2, "0")}-${String(ssfDate.m).padStart(2, "0")}-${ssfDate.y}`;
-            }
-        } catch (e) {
-            dateObj = excelSerialDateToJSDate(excelDate);
-        }
+        dateObj = excelSerialDateToJSDate(excelDate);
         if (!dateObj) dateObj = excelSerialDateToJSDate(excelDate);
         if (dateObj && !isNaN(dateObj.getTime())) {
             const day = String(dateObj.getUTCDate()).padStart(2, "0");
